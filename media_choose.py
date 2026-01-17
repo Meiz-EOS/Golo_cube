@@ -1,11 +1,3 @@
-"""
-Полный файл Image Viewer с:
-- индивидуальной яркостью/контрастом для статических изображений
-- индивидуальной яркостью и скоростью для видео (mpv/ffplay/vlc)
-- коррекцией gamma для сохранения глубокого чёрного при изменении яркости
-- пользовательскими изображениями с фиксированными brightness/contrast = 1.0
-"""
-
 import os
 import time
 import json
@@ -18,7 +10,7 @@ import subprocess
 import requests
 from flask import Flask, send_file, request, jsonify
 import tkinter as tk
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageEnhance
 
 # ---------- Configuration ----------
 DOWNLOAD_FOLDER = './downloaded_images'
@@ -318,10 +310,10 @@ class ImageViewer:
             screen_w = int(self.root.winfo_screenwidth())
             screen_h = int(self.root.winfo_screenheight())
 
-            # отступы чтобы ничего не обрезалось
-            LEFT_OFFSET  = 5
+            # offsets to prevent cropping
+            LEFT_OFFSET   = 5
             RIGHT_OFFSET = 100
-            TOP_OFFSET   = 0
+            TOP_OFFSET    = 0
             BOTTOM_OFFSET = 0
 
             adj_w = screen_w - LEFT_OFFSET - RIGHT_OFFSET
@@ -361,7 +353,7 @@ class ImageViewer:
                     vid_brightness = None
 
             # Compute gamma compensation to preserve deep black.
-            # Strategy: when brightness > 0 we apply negative gamma to counteract black lift.
+            # Strategy: when brightness > 0 we apply negative gamma adjustment to counteract black lift.
             # This formula is empirical and adjustable:
             #    vid_gamma = -(vid_brightness / 100.0) * 1.6
             # clamp gamma to reasonable range (-2.0..2.0)
@@ -379,7 +371,7 @@ class ImageViewer:
 
             cmds = []
 
-            # mpv: используем scale + pad; передаём --brightness и --gamma и --speed если заданы
+            # mpv: use scale + pad; pass --brightness and --gamma and --speed if set
             mpv_vf = (
                 "lavfi=[transpose=1,"
                 f"scale={adj_w}:{adj_h}:force_original_aspect_ratio=0,"
@@ -394,7 +386,9 @@ class ImageViewer:
             if vid_brightness is not None:
                 mpv_cmd.append(f'--brightness={vid_brightness}')
             if vid_gamma is not None:
-                mpv_cmd.append(f'--gamma={vid_gamma}')
+                # mpv typically expects positive gamma. We apply the calculated drift to 1.0.
+                # If your mpv build supports negative gamma, remove "1.0 +".
+                mpv_cmd.append(f'--gamma={1.0 + vid_gamma}')
             if vid_speed is not None and float(vid_speed) != 1.0:
                 mpv_cmd.append(f'--speed={vid_speed}')
 
@@ -487,7 +481,7 @@ class ImageViewer:
                 print("⚠️ missing static image file")
                 return
 
-            # --- SYNCHРОННЫЙ СТАРТ МУЗЫКИ + ВИДЕО ---
+            # --- SYNCHRONOUS START MUSIC + VIDEO ---
             if str(lighting_data).lower() == 'on':
                 anim = self.static_animation.get(img_num)
                 if anim:
@@ -560,12 +554,11 @@ class ImageViewer:
 
             img = Image.open(image_path)
 
-            # ПОВОРОТ НА 180 ГРАДУСОВ (требование)
+            # ROTATE 180 DEGREES (Requirement)
             img = img.rotate(180, expand=True)
 
-            # --- ЯРКОСТЬ И КОНТРАСТ ---
+            # --- BRIGHTNESS & CONTRAST ---
             try:
-                from PIL import ImageEnhance
                 if brightness is None:
                     brightness = 1.0
                 if contrast is None:
@@ -604,10 +597,10 @@ class ImageViewer:
             label.image = photo
             label.pack(fill=tk.BOTH, expand=True)
 
-            # music handling (если указан конкретный mp3 - поддерживаем абсолютный/относительный/размещённый в DOWNLOAD/STATIC)
+            # music handling
             if isinstance(music_data, str) and music_data.lower().endswith('.mp3'):
                 chosen = None
-                # абсолютный путь?
+                # absolute path?
                 if os.path.isabs(music_data) and os.path.exists(music_data):
                     chosen = music_data
                 else:
@@ -618,7 +611,6 @@ class ImageViewer:
                 if chosen:
                     self.start_music(chosen)
                 else:
-                    # if string 'on' or 'off'
                     if music_data.lower() == 'on':
                         self.start_music()
                     elif music_data.lower() == 'off':
