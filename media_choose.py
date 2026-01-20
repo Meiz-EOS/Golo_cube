@@ -15,8 +15,8 @@ from PIL import Image, ImageTk, ImageEnhance
 # ---------- Configuration ----------
 DOWNLOAD_FOLDER = './downloaded_images'
 STATIC_IMAGES_FOLDER = '/home/un/Downloads'  # change if needed
-SERVER_URL = "https://myTree.pythonanywhere.com/files"
-STATIC_IMAGES_LOG = "https://myTree.pythonanywhere.com/logs/static_images"
+# SERVER_URL удален, так как мы больше не опрашиваем сервер
+# STATIC_IMAGES_LOG удален, так как мы больше не опрашиваем логи
 ANIMATION_LOG = "/tmp/animation_player.log"
 
 # Default/user forced values for custom images
@@ -24,27 +24,19 @@ USER_BRIGHTNESS = 1.0
 USER_CONTRAST = 1.0
 
 # --- Individual settings for static images (per image id as string) ---
-# brightness: multiplier for PIL Brightness (1.0 == original)
 BRIGHTNESS_STATIC = {
     "1": 1.25,
     "2": 1.40,
     "3": 1.10,
-    # add more mappings if you have more static images
 }
 
-# contrast: multiplier for PIL Contrast (1.0 == original)
 CONTRAST_STATIC = {
     "1": 1.20,
     "2": 1.35,
     "3": 1.00,
-    # add more mappings as needed
 }
 
 # --- Per-video overrides: brightness and playback speed ---
-# VIDEO_BRIGHTNESS: can be either:
-#  - value in range -100..100 (mpv-style percent), OR
-#  - small float like -0.2..0.2 (we will auto-scale to percent)
-# VIDEO_SPEED: playback speed (1.0 normal, <1 slower, >1 faster)
 VIDEO_BRIGHTNESS = {
     "1": 10,    # mpv brightness +10
     "2": -5,    # mpv brightness -5
@@ -79,7 +71,7 @@ class ImageViewer:
         self.current_image_data = None
         self.last_processed_data = {}
 
-        # Static assets (filenames located in STATIC_IMAGES_FOLDER)
+        # Static assets
         self.static_images = {
             "1": "static_1.png",
             "2": "static_2.png",
@@ -110,7 +102,7 @@ class ImageViewer:
                         filename = f.filename
                         save_path = os.path.join(DOWNLOAD_FOLDER, filename)
                         f.save(save_path)
-                        print(f"💾 Received file: {filename}")
+                        print(f"💾 Received file via PUSH: {filename}")
 
                 data = {}
                 if request.form:
@@ -140,7 +132,7 @@ class ImageViewer:
                     data['brightness'] = USER_BRIGHTNESS
                     data['contrast'] = USER_CONTRAST
 
-                print("🔔 Webhook data:", data)
+                print("🔔 Webhook (Server Push) data:", data)
 
                 if data.get('type') in ['static_image', 'custom_image']:
                     self.image_queue.put(data)
@@ -158,11 +150,13 @@ class ImageViewer:
 
         self.process_queue()
 
-        threading.Thread(target=self.poll_server, daemon=True).start()
-        threading.Thread(target=self.poll_static_images, daemon=True).start()
+        # УДАЛЕНО: threading.Thread(target=self.poll_server...
+        # УДАЛЕНО: threading.Thread(target=self.poll_static_images...
+        
+        # Запускаем только Flask сервер для приема входящих подключений
         threading.Thread(target=self.run_flask, daemon=True).start()
 
-        print("✅ ImageViewer started")
+        print("✅ ImageViewer started (PUSH MODE ONLY)")
         try:
             self.root.mainloop()
         except KeyboardInterrupt:
@@ -226,18 +220,11 @@ class ImageViewer:
 
     # ---------- MUSIC ----------
     def start_music(self, music_file=None):
-        """
-        music_file can be:
-          - absolute path to an mp3
-          - filename present in DOWNLOAD_FOLDER or STATIC_IMAGES_FOLDER
-          - None -> default path /home/un/Downloads/music.mp3
-        """
         try:
             self.stop_music()
 
             music_path = None
             if music_file:
-                # already absolute?
                 if os.path.isabs(music_file) and os.path.exists(music_file):
                     music_path = music_file
                 else:
@@ -247,7 +234,7 @@ class ImageViewer:
                         music_path = cand1
                     elif os.path.exists(cand2):
                         music_path = cand2
-                    elif os.path.exists(music_file):  # maybe relative path
+                    elif os.path.exists(music_file):
                         music_path = music_file
             else:
                 default = "/home/un/Downloads/music.mp3"
@@ -286,16 +273,12 @@ class ImageViewer:
 
     # ---------- ANIMATION ----------
     def start_animation(self, animation_file, image_number=None):
-        """
-        Start animation/video. Accepts image_number (string or int) to lookup VIDEO_BRIGHTNESS and VIDEO_SPEED.
-        Returns True if a player started successfully.
-        """
         try:
             self.stop_animation()
 
             cand1 = os.path.join(STATIC_IMAGES_FOLDER, animation_file)
             cand2 = os.path.join(DOWNLOAD_FOLDER, animation_file)
-            cand3 = animation_file  # maybe absolute or relative
+            cand3 = animation_file
 
             if os.path.exists(cand1):
                 path = cand1
@@ -310,7 +293,6 @@ class ImageViewer:
             screen_w = int(self.root.winfo_screenwidth())
             screen_h = int(self.root.winfo_screenheight())
 
-            # offsets to prevent cropping
             LEFT_OFFSET   = 5
             RIGHT_OFFSET = 100
             TOP_OFFSET    = 0
@@ -333,45 +315,33 @@ class ImageViewer:
             if os.path.exists(xa):
                 env['XAUTHORITY'] = xa
 
-            # Determine per-video brightness/speed
             img_num = str(image_number) if image_number is not None else ''
             raw_vid_brightness = VIDEO_BRIGHTNESS.get(img_num, None)
             vid_speed = VIDEO_SPEED.get(img_num, 1.0)
 
-            # Normalize brightness:
-            # Accept either percent-like (-100..100) or small floats (-0.2..0.2) -> scale them
             vid_brightness = None
             if raw_vid_brightness is not None:
                 try:
                     vb = float(raw_vid_brightness)
                     if abs(vb) <= 2.0:
-                        # looks like fraction -> scale to percent
                         vid_brightness = vb * 100.0
                     else:
                         vid_brightness = vb
                 except:
                     vid_brightness = None
 
-            # Compute gamma compensation to preserve deep black.
-            # Strategy: when brightness > 0 we apply negative gamma adjustment to counteract black lift.
-            # This formula is empirical and adjustable:
-            #    vid_gamma = -(vid_brightness / 100.0) * 1.6
-            # clamp gamma to reasonable range (-2.0..2.0)
             vid_gamma = None
             if vid_brightness is not None:
                 try:
                     vg = -(vid_brightness / 100.0) * 1.6
-                    if vg < -2.0:
-                        vg = -2.0
-                    if vg > 2.0:
-                        vg = 2.0
+                    if vg < -2.0: vg = -2.0
+                    if vg > 2.0: vg = 2.0
                     vid_gamma = vg
                 except:
                     vid_gamma = None
 
             cmds = []
 
-            # mpv: use scale + pad; pass --brightness and --gamma and --speed if set
             mpv_vf = (
                 "lavfi=[transpose=1,"
                 f"scale={adj_w}:{adj_h}:force_original_aspect_ratio=0,"
@@ -386,8 +356,6 @@ class ImageViewer:
             if vid_brightness is not None:
                 mpv_cmd.append(f'--brightness={vid_brightness}')
             if vid_gamma is not None:
-                # mpv typically expects positive gamma. We apply the calculated drift to 1.0.
-                # If your mpv build supports negative gamma, remove "1.0 +".
                 mpv_cmd.append(f'--gamma={1.0 + vid_gamma}')
             if vid_speed is not None and float(vid_speed) != 1.0:
                 mpv_cmd.append(f'--speed={vid_speed}')
@@ -395,18 +363,15 @@ class ImageViewer:
             mpv_cmd += [f'--vf={mpv_vf}', '--loop-file=inf', path]
             cmds.append(mpv_cmd)
 
-            # ffplay: use eq filter for brightness and atempo for speed (audio)
             ffplay_vf = f"transpose=1,scale={adj_w}:{adj_h}"
             if vid_brightness is not None:
-                # ffmpeg eq brightness uses small float -1..1 roughly => convert percent to small float
                 try:
-                    ff_b = float(vid_brightness) / 100.0  # e.g. +10 -> 0.1
+                    ff_b = float(vid_brightness) / 100.0
                 except:
                     ff_b = 0.0
                 ffplay_vf = f"transpose=1,eq=brightness={ff_b},scale={adj_w}:{adj_h}"
 
             ffplay_cmd = ['ffplay', '-autoexit', '-hide_banner', '-loglevel', 'error', '-vf', ffplay_vf, '-loop', '0', path]
-            # for speed, atempo supports 0.5-2.0; if outside that range we skip audio speed adjust
             try:
                 if float(vid_speed) != 1.0 and 0.5 <= float(vid_speed) <= 2.0:
                     ffplay_cmd = ['ffplay', '-autoexit', '-hide_banner', '-loglevel', 'error', '-vf', ffplay_vf, '-af', f"atempo={vid_speed}", '-loop', '0', path]
@@ -414,7 +379,6 @@ class ImageViewer:
                 pass
             cmds.append(ffplay_cmd)
 
-            # vlc/cvlc: set rate and fullscreen
             vlc_cmd = ['cvlc', '--fullscreen', '--loop', path]
             try:
                 if float(vid_speed) != 1.0:
@@ -423,11 +387,9 @@ class ImageViewer:
                 pass
             cmds.append(vlc_cmd)
 
-            # Try commands in order, return True on first success
             for cmd in cmds:
                 player = cmd[0]
                 if not shutil.which(player):
-                    print(f"player {player} missing")
                     continue
                 try:
                     with open(ANIMATION_LOG, "ab") as lf:
@@ -436,7 +398,6 @@ class ImageViewer:
                     if proc.poll() is None:
                         self.current_video_process = proc
                         print("▶ started player:", player)
-                        print("  cmd:", " ".join(cmd))
                         return True
                 except Exception as e:
                     print("❌ animation player failed:", e)
@@ -481,22 +442,18 @@ class ImageViewer:
                 print("⚠️ missing static image file")
                 return
 
-            # --- SYNCHRONOUS START MUSIC + VIDEO ---
             if str(lighting_data).lower() == 'on':
                 anim = self.static_animation.get(img_num)
                 if anim:
-                    # start music first
                     if music_data == 'on':
                         final_music = self.static_music.get(img_num)
                         if final_music:
                             self.start_music(final_music)
 
-                    # then start animation (pass image_number so we can pick VIDEO_* settings)
                     if self.start_animation(anim, image_number=img_num):
                         self.create_control_window_for_animation()
                         return
 
-            # fallback to static image
             self.show_image_rotated(img_path, brightness, contrast, music_data, lighting_data)
 
         except Exception as e:
@@ -522,12 +479,11 @@ class ImageViewer:
     def handle_custom_image(self, filename, brightness, contrast, music_data, lighting_data):
         try:
             img_path = os.path.join(DOWNLOAD_FOLDER, filename)
+            # Файл должен уже быть загружен через webhook
             if not os.path.exists(img_path):
-                url = f"https://myTree.pythonanywhere.com/download/{filename}"
-                if not self.download_file(url, img_path):
-                    return
+                print("⚠️ File not found (push failed?):", img_path)
+                return
 
-            # enforce user image brightness/contrast
             brightness = USER_BRIGHTNESS
             contrast = USER_CONTRAST
 
@@ -553,16 +509,11 @@ class ImageViewer:
             screen_height = int(self.root.winfo_screenheight())
 
             img = Image.open(image_path)
-
-            # ROTATE 180 DEGREES (Requirement)
             img = img.rotate(180, expand=True)
 
-            # --- BRIGHTNESS & CONTRAST ---
             try:
-                if brightness is None:
-                    brightness = 1.0
-                if contrast is None:
-                    contrast = 1.0
+                if brightness is None: brightness = 1.0
+                if contrast is None: contrast = 1.0
                 try:
                     b = float(brightness)
                 except:
@@ -572,7 +523,6 @@ class ImageViewer:
                 except:
                     c = 1.0
 
-                # Apply brightness then contrast
                 if abs(b - 1.0) > 1e-6:
                     img = ImageEnhance.Brightness(img).enhance(b)
                 if abs(c - 1.0) > 1e-6:
@@ -585,7 +535,6 @@ class ImageViewer:
             else:
                 res = Image.LANCZOS
 
-            # Resize to screen
             img_resized = img.resize((screen_width, screen_height), res)
             photo = ImageTk.PhotoImage(img_resized)
 
@@ -596,10 +545,8 @@ class ImageViewer:
             label.image = photo
             label.pack(fill=tk.BOTH, expand=True)
 
-            # music handling
             if isinstance(music_data, str) and music_data.lower().endswith('.mp3'):
                 chosen = None
-                # absolute path?
                 if os.path.isabs(music_data) and os.path.exists(music_data):
                     chosen = music_data
                 else:
@@ -641,87 +588,11 @@ class ImageViewer:
                 pass
         self.current_window = None
 
-    # ---------- Poll server ----------
-    def poll_server(self):
-        while self.is_running:
-            try:
-                resp = requests.get(SERVER_URL, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    files = data.get("files", [])
-                    for f in sorted(files, key=lambda x: x.get('upload_time',''), reverse=True):
-                        filename = f.get("filename")
-                        url = f.get("url")
-                        if not filename or not url:
-                            continue
-                        local = os.path.join(DOWNLOAD_FOLDER, filename)
-                        if not os.path.exists(local):
-                            if self.download_file(url, local):
-                                # custom images should use USER_BRIGHTNESS/CONTRAST
-                                self.image_queue.put({
-                                    'type':'custom_image',
-                                    'filename': filename,
-                                    'brightness': USER_BRIGHTNESS,
-                                    'contrast': USER_CONTRAST,
-                                    'music_data':'off',
-                                    'lighting_data':'off'
-                                })
-                                break
-            except Exception as e:
-                print("❌ poll_server error:", e)
-            time.sleep(30)
-
-    # ---------- Poll static images ----------
-    def poll_static_images(self):
-        while self.is_running:
-            try:
-                resp = requests.get(STATIC_IMAGES_LOG, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    logs = data.get('logs',[])
-                    if logs:
-                        last = logs[-1].strip()
-                        if last and last != self.last_processed_data.get('log'):
-                            try:
-                                d = json.loads(last)
-                                img_num = str(d.get('image_number','1'))
-                                # Use per-image dictionaries if present; otherwise fall back to values from log
-                                b = BRIGHTNESS_STATIC.get(img_num, float(d.get('brightness', USER_BRIGHTNESS)))
-                                c = CONTRAST_STATIC.get(img_num, float(d.get('contrast', USER_CONTRAST)))
-                                put = {
-                                    'type':'static_image',
-                                    'image_number': img_num,
-                                    'brightness': b,
-                                    'contrast': c,
-                                    'music_data': d.get('music_data','off'),
-                                    'lighting_data': d.get('lighting_data','off'),
-                                    'log': last
-                                }
-                                self.last_processed_data = put
-                                self.image_queue.put(put)
-                            except Exception as e:
-                                print("❌ parse static log error", e)
-            except Exception as e:
-                print("❌ poll_static_images error:", e)
-            time.sleep(10)
-
-    # ---------- Download helper ----------
-    def download_file(self, url, path):
-        try:
-            r = requests.get(url, timeout=30)
-            if r.status_code == 200:
-                with open(path,"wb") as f:
-                    f.write(r.content)
-                return True
-        except Exception as e:
-            print("❌ download_file error:", e)
-        return False
-
     # ---------- Flask ----------
     def run_flask(self):
         @app.route('/')
         def home():
-            return f"<h1>Image Viewer</h1><p>music: {'ON' if self.music_enabled else 'OFF'}</p><p>queue: {self.image_queue.qsize()}</p>"
+            return f"<h1>Image Viewer (PUSH MODE)</h1><p>music: {'ON' if self.music_enabled else 'OFF'}</p><p>queue: {self.image_queue.qsize()}</p>"
 
         @app.route('/image/<filename>')
         def serve_image(filename):
@@ -734,7 +605,8 @@ class ImageViewer:
             return {
                 'music_enabled': self.music_enabled,
                 'is_running': self.is_running,
-                'queue_size': self.image_queue.qsize()
+                'queue_size': self.image_queue.qsize(),
+                'mode': 'push_only'
             }
 
         try:
@@ -744,6 +616,6 @@ class ImageViewer:
 
 # ---------- RUN ----------
 if __name__ == '__main__':
-    print("🚀 Starting Image Viewer")
+    print("🚀 Starting Image Viewer (SERVER-PUSH CONFIG)")
     viewer = ImageViewer()
     viewer.start()
