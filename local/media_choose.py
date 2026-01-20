@@ -18,20 +18,24 @@ except ImportError:
     HAS_PULSE = False
     print("⚠️ ВНИМАНИЕ: Библиотека 'pulsectl' не найдена. Звук регулироваться не будет.")
 
-# --- КОНФИГУРАЦИЯ ---
-DOWNLOAD_FOLDER = './downloaded_media'
-STATIC_VIDEO_FOLDER = './static_videos'
+# --- ОПРЕДЕЛЕНИЕ ПУТЕЙ (АБСОЛЮТНАЯ ПРИВЯЗКА) ---
+# Получаем точный путь к папке, где лежит этот скрипт (media_choose.py)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DOWNLOAD_FOLDER = os.path.join(BASE_DIR, 'downloaded_media')
+STATIC_VIDEO_FOLDER = os.path.join(BASE_DIR, 'static_videos')
+
 SERVER_UPDATE_URL = "https://myTree.pythonanywhere.com/admin/update_url"
 ADMIN_SECRET = "GOLO_CUBE_SECRET_KEY_2025" 
 
 # Настройки изображения для MPV (Яркость/Контраст: -100 до 100)
-# Конвертируем ваши коэффициенты (1.25) в шкалу MPV
 VIDEO_SETTINGS = {
-    "1": {"brightness": 25, "contrast": 20}, # Было 1.25 и 1.20
-    "2": {"brightness": 40, "contrast": 35}, # Было 1.40 и 1.35
-    "3": {"brightness": 10, "contrast": 0},  # Было 1.10 и 1.00
+    "1": {"brightness": 25, "contrast": 20},
+    "2": {"brightness": 40, "contrast": 35},
+    "3": {"brightness": 10, "contrast": 0},
 }
 
+# Создаем папки, если их нет
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 os.makedirs(STATIC_VIDEO_FOLDER, exist_ok=True)
 
@@ -53,7 +57,8 @@ class MediaController:
     def __init__(self):
         self.cmd_queue = queue.Queue()
         self.is_running = True
-        self.current_process = None # Процесс плеера (mpv)
+        self.current_process = None
+        # Имена файлов должны быть именно такими внутри папки static_videos
         self.static_files = {
             "1": "video_1.mp4",
             "2": "video_2.mp4",
@@ -82,14 +87,13 @@ class MediaController:
                 return jsonify({'error': str(e)}), 500
 
     def start(self):
-        # Запускаем Flask в отдельном потоке
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000, use_reloader=False), daemon=True).start()
         threading.Thread(target=sync_ngrok_url_to_server, daemon=True).start()
         
-        print(f"✅ VIDEO SYSTEM STARTED (Player: MPV | Sound: {'PULSECTL' if HAS_PULSE else 'LEGACY'})")
-        print(f"📂 Ожидаю файлы в: {STATIC_VIDEO_FOLDER}")
+        print(f"✅ MEDIA CONTROLLER STARTED")
+        print(f"📂 Корневая директория: {BASE_DIR}")
+        print(f"📂 Папка с видео (ожидаемая): {STATIC_VIDEO_FOLDER}")
         
-        # Главный цикл обработки очереди
         try:
             while self.is_running:
                 try:
@@ -113,39 +117,41 @@ class MediaController:
                 self.set_volume(data.get('action'))
                 return
 
-            # Логика воспроизведения видео
+            # Логика воспроизведения
             fname = data.get('filename')
             img_num = str(data.get('image_number', '0'))
             
-            # Получаем путь к файлу
             target_path = None
             settings = {"brightness": 0, "contrast": 0}
 
-            if cmd_type == 'static_image': # Оставляем имя типа команды для совместимости с голосовым ассистентом
+            # 1. СТАТИЧЕСКИЕ ВИДЕО (Медиа 1, 2, 3)
+            if cmd_type == 'static_image': 
                 if img_num in self.static_files:
                     target_path = os.path.join(STATIC_VIDEO_FOLDER, self.static_files[img_num])
                     settings = VIDEO_SETTINGS.get(img_num, settings)
+                else:
+                    print(f"⚠️ Неизвестный номер медиа: {img_num}")
             
+            # 2. КАСТОМНЫЕ ФАЙЛЫ
             elif cmd_type == 'custom_video' or (cmd_type == 'custom_image' and fname):
                 if fname:
                     target_path = os.path.join(DOWNLOAD_FOLDER, fname)
             
-            if target_path and os.path.exists(target_path):
-                self.play_video(target_path, settings)
+            # ПРОВЕРКА И ЗАПУСК
+            if target_path:
+                if os.path.exists(target_path):
+                    self.play_video(target_path, settings)
+                else:
+                    print(f"❌ ФАЙЛ НЕ НАЙДЕН ПО ПУТИ: {target_path}")
+                    print(f"   Убедитесь, что файл '{self.static_files.get(img_num, '???')}' лежит в папке 'static_videos' рядом со скриптом.")
             else:
-                print(f"❌ Файл не найден: {target_path}")
+                print("⚠️ Путь к файлу не сформирован.")
 
         except Exception as e:
             print(f"Error processing: {e}")
 
     def play_video(self, path, settings):
-        self.stop_all() # Сначала останавливаем всё предыдущее
-        
-        # Формируем команду для MPV
-        # --loop: зациклить видео
-        # --fs: полный экран
-        # --video-rotate=180: поворот изображения (ваше требование)
-        # --brightness / --contrast: коррекция
+        self.stop_all()
         
         cmd = [
             'mpv',
@@ -154,35 +160,30 @@ class MediaController:
             '--video-rotate=180',
             f'--brightness={settings["brightness"]}',
             f'--contrast={settings["contrast"]}',
-            '--no-osc', # Скрыть интерфейс плеера
+            '--no-osc',
             path
         ]
         
-        print(f"▶️ Запуск видео: {os.path.basename(path)}")
+        print(f"▶️ Запуск: {path}")
         try:
-            # Запускаем процесс, не блокируя основной поток
             self.current_process = subprocess.Popen(
                 cmd, 
                 stdout=subprocess.DEVNULL, 
                 stderr=subprocess.DEVNULL
             )
         except FileNotFoundError:
-            print("❌ ОШИБКА: Плеер 'mpv' не установлен! Выполните: sudo apt install mpv")
+            print("❌ ОШИБКА: 'mpv' не установлен! (sudo apt install mpv)")
 
     def stop_all(self):
         if self.current_process:
-            print("⏹️ Остановка воспроизведения")
+            print("⏹️ Стоп")
             try:
-                # Мягкая остановка
                 self.current_process.terminate()
                 self.current_process.wait(timeout=1)
             except:
-                # Жесткая остановка если завис
                 try: self.current_process.kill() 
                 except: pass
             self.current_process = None
-        
-        # На всякий случай убиваем любые "хвосты"
         subprocess.run(['pkill', 'mpv'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def set_volume(self, action):
