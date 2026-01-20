@@ -38,7 +38,7 @@ FACTS_RUSSIAN = ["Москва основана в 1147 году.", "Байка�
 
 # ================= AI АНАЛИЗАТОР =================
 class CommandAnalyzer:
-    def __init__(self, intents_map: dict, threshold=60):
+    def __init__(self, intents_map: dict, threshold=70):
         self.intents_map = intents_map
         self.threshold = threshold
         self.corpus = []
@@ -198,8 +198,6 @@ class InfoAssistant:
                 stream.close()
             except: pass
             p.terminate()
-            if sys.platform == "win32":
-                os.system("pause")
 
     def process_command(self, text: str):
         res = self.analyzer.analyze(text)
