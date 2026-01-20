@@ -49,6 +49,7 @@ class InfoAssistant:
         self.running = True
         self.intents = self._setup_intents()
         self.analyzer = CommandAnalyzer(self.intents, threshold=65)
+        self.listen_until = 0.0  # Время, до которого ассистент слушает команды
         
         if not os.path.exists(MODEL_PATH):
             print(f"❌ ОШИБКА: Нет папки model")
@@ -149,19 +150,40 @@ class InfoAssistant:
         p = pyaudio.PyAudio()
         stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=4000)
         stream.start_stream()
-        print("\n🎤 ГОВОРИТЕ... (Команды: 'Громче', 'Тише', 'Стоп')")
+        print("\n💤 РЕЖИМ ОЖИДАНИЯ. Скажите 'ЮХИН', чтобы активировать...")
 
         while self.running:
             data = stream.read(4000, exception_on_overflow=False)
             if self.recognizer.AcceptWaveform(data):
                 res = json.loads(self.recognizer.Result())
                 text = res.get('text', '')
-                if text:
-                    print(f"🗣️  '{text}'")
+                
+                if not text:
+                    continue
+
+                current_time = time.time()
+                
+                # Проверяем, находимся ли мы в активном окне прослушивания
+                if current_time < self.listen_until:
+                    # ЛОГИКА СКОЛЬЗЯЩЕГО ОКНА:
+                    # Если мы услышали речь, мы продлеваем время прослушивания еще на 5 секунд
+                    self.listen_until = current_time + 5.0
+                    print(f"⏱️  Речь обнаружена. Таймер сброшен (+5 сек).")
+                    
+                    print(f"🟢 (Активен) Слышу: '{text}'")
                     match = self.analyzer.analyze(text)
                     if match:
-                        print(f"🚀 {match['intent']}")
+                        print(f"🚀 Выполняю: {match['intent']}")
                         self.intents[match['intent']]['func']()
+                else:
+                    # Режим ожидания: Ищем только ключевое слово "Юхин"
+                    # fuzz.partial_ratio позволяет найти имя даже во фразе "Эй Юхин привет"
+                    wake_score = fuzz.partial_ratio("юхин", text.lower())
+                    if wake_score >= 80:
+                        self.listen_until = current_time + 5.0
+                        print(f"\n🔔 ЮХИН АКТИВИРОВАН! Слушаю команды 5 секунд...")
+                    else:
+                        print(f"💤 (Игнор) '{text}'")
         
         stream.stop_stream()
         stream.close()

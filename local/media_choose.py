@@ -12,7 +12,7 @@ from PIL import Image, ImageTk, ImageEnhance
 import sys
 
 # --- БЛОК ИНИЦИАЛИЗАЦИИ ЗВУКА (КРИТИЧЕСКИ ВАЖЕН) ---
-HAS_PULSE = False # Гарантируем, что переменная существует
+HAS_PULSE = False 
 try:
     import pulsectl
     HAS_PULSE = True
@@ -97,13 +97,22 @@ class ImageViewer:
         try:
             cmd_type = data.get('type')
             
-            # === ЛОГИКА ГРОМКОСТИ ===
+            # === РЕАКЦИЯ 1: СТОП (НОВАЯ) ===
+            if cmd_type == 'stop':
+                print("🛑 COMMAND: STOP ALL")
+                self.stop_all_media()
+                if self.current_window:
+                    self.current_window.destroy()
+                    self.current_window = None
+                return
+
+            # === РЕАКЦИЯ 2: ГРОМКОСТЬ ===
             if cmd_type == 'volume':
                 action = data.get('action')
                 self.set_volume(action)
                 return
 
-            # === ЛОГИКА КАРТИНОК ===
+            # === РЕАКЦИЯ 3: КАРТИНКИ (STATIC & CUSTOM) ===
             img_num = str(data.get('image_number', '0'))
             b = float(data.get('brightness', 1.0))
             c = float(data.get('contrast', 1.0))
@@ -114,29 +123,26 @@ class ImageViewer:
                 b = BRIGHTNESS_STATIC.get(img_num, b)
                 c = CONTRAST_STATIC.get(img_num, c)
                 self.handle_static_image(img_num, b, c, mus)
-            else:
+            
+            elif cmd_type == 'custom_image' or fname:
                 self.handle_custom_image(fname, 1.0, 1.0, mus)
+                
         except Exception as e: print(f"Error processing data: {e}")
 
     # === УПРАВЛЕНИЕ ЗВУКОМ (PULSECTL - PROFESSIONAL METHOD) ===
     def set_volume(self, action):
-        # Используем глобальную переменную HAS_PULSE
         if not HAS_PULSE:
             print("❌ ОШИБКА: Библиотека pulsectl не установлена! Звук не изменится.")
-            # Можно попробовать fallback, но лучше починить библиотеку
             return
 
         try:
-            # Подключаемся к звуковому серверу
             with pulsectl.Pulse('golo-volume-control') as pulse:
-                # Получаем СПИСОК ВСЕХ устройств вывода
                 sinks = pulse.sink_list()
                 
                 if not sinks:
                     print("⚠️ Аудио-устройства не найдены!")
                     return
 
-                # Применяем команду КО ВСЕМ устройствам сразу
                 for sink in sinks:
                     if action == 'up':
                         pulse.volume_change_all_chans(sink, 0.1)
