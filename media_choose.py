@@ -580,7 +580,6 @@ class ImageViewer:
             except Exception as e:
                 print("⚠️ image enhance error:", e)
 
-            # Resampling
             if hasattr(Image, "Resampling"):
                 res = Image.Resampling.LANCZOS
             else:
