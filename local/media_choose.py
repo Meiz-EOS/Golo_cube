@@ -111,21 +111,30 @@ class ImageViewer:
     def set_volume(self, action):
         try:
             cmd = []
+            # Используем pactl для управления системным микшером PipeWire
             if action == 'up':
-                cmd = ['amixer', 'sset', 'Master', '10%+', 'unmute']
-                print("🔊 Громкость +10%")
+                cmd = ['pactl', 'set-sink-volume', '@DEFAULT_SINK@', '+10%']
+                print("🔊 Громкость +10% (PipeWire)")
             elif action == 'down':
-                cmd = ['amixer', 'sset', 'Master', '10%-', 'unmute']
-                print("🔉 Громкость -10%")
+                cmd = ['pactl', 'set-sink-volume', '@DEFAULT_SINK@', '-10%']
+                print("🔉 Громкость -10% (PipeWire)")
             elif action == 'max':
-                cmd = ['amixer', 'sset', 'Master', '100%', 'unmute']
-                print("📢 Громкость MAX")
+                cmd = ['pactl', 'set-sink-volume', '@DEFAULT_SINK@', '100%']
+                # Принудительно включаем звук (unmute) при максимуме
+                subprocess.run(['pactl', 'set-sink-mute', '@DEFAULT_SINK@', '0'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print("📢 Громкость MAX (PipeWire)")
             elif action == 'mute':
-                cmd = ['amixer', 'sset', 'Master', '0%', 'off']
-                print("🔇 Звук ВЫКЛ")
+                cmd = ['pactl', 'set-sink-mute', '@DEFAULT_SINK@', 'toggle']
+                print("🔇 Звук MUTE (Toggle)")
             
             if cmd:
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # Запускаем команду
+                res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                if res.returncode != 0:
+                    # Если pactl не сработал, пробуем старый метод amixer как запасной вариант
+                    print(f"⚠️ pactl failed, пробуем amixer...")
+                    self.set_volume_fallback(action)
+
         except Exception as e:
             print(f"Ошибка звука: {e}")
 
