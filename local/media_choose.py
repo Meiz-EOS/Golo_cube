@@ -9,6 +9,17 @@ import requests
 from flask import Flask, request, jsonify
 import tkinter as tk
 from PIL import Image, ImageTk, ImageEnhance
+import sys
+
+# --- БЛОК ИНИЦИАЛИЗАЦИИ ЗВУКА (КРИТИЧЕСКИ ВАЖЕН) ---
+HAS_PULSE = False # Гарантируем, что переменная существует
+try:
+    import pulsectl
+    HAS_PULSE = True
+except ImportError:
+    HAS_PULSE = False
+    print("⚠️ ВНИМАНИЕ: Библиотека 'pulsectl' не найдена. Установите её: pip install pulsectl")
+# ----------------------------------------------------
 
 # CONFIGURATION
 DOWNLOAD_FOLDER = './downloaded_images'
@@ -71,7 +82,7 @@ class ImageViewer:
         self.process_queue()
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000, use_reloader=False), daemon=True).start()
         threading.Thread(target=sync_ngrok_url_to_server, daemon=True).start()
-        print("✅ GUI Started")
+        print(f"✅ GUI Started (Sound control: {'PULSECTL' if HAS_PULSE else 'LEGACY'})")
         try: self.root.mainloop()
         except KeyboardInterrupt: self.is_running = False
 
@@ -105,38 +116,49 @@ class ImageViewer:
                 self.handle_static_image(img_num, b, c, mus)
             else:
                 self.handle_custom_image(fname, 1.0, 1.0, mus)
-        except Exception as e: print(f"Error: {e}")
+        except Exception as e: print(f"Error processing data: {e}")
 
-    # === УПРАВЛЕНИЕ ЗВУКОМ (ALSA) ===
+    # === УПРАВЛЕНИЕ ЗВУКОМ (PULSECTL - PROFESSIONAL METHOD) ===
     def set_volume(self, action):
+        # Используем глобальную переменную HAS_PULSE
+        if not HAS_PULSE:
+            print("❌ ОШИБКА: Библиотека pulsectl не установлена! Звук не изменится.")
+            # Можно попробовать fallback, но лучше починить библиотеку
+            return
+
         try:
-            cmd = []
-            # Используем pactl для управления системным микшером PipeWire
-            if action == 'up':
-                cmd = ['pactl', 'set-sink-volume', '@DEFAULT_SINK@', '+10%']
-                print("🔊 Громкость +10% (PipeWire)")
-            elif action == 'down':
-                cmd = ['pactl', 'set-sink-volume', '@DEFAULT_SINK@', '-10%']
-                print("🔉 Громкость -10% (PipeWire)")
-            elif action == 'max':
-                cmd = ['pactl', 'set-sink-volume', '@DEFAULT_SINK@', '100%']
-                # Принудительно включаем звук (unmute) при максимуме
-                subprocess.run(['pactl', 'set-sink-mute', '@DEFAULT_SINK@', '0'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                print("📢 Громкость MAX (PipeWire)")
-            elif action == 'mute':
-                cmd = ['pactl', 'set-sink-mute', '@DEFAULT_SINK@', 'toggle']
-                print("🔇 Звук MUTE (Toggle)")
-            
-            if cmd:
-                # Запускаем команду
-                res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                if res.returncode != 0:
-                    # Если pactl не сработал, пробуем старый метод amixer как запасной вариант
-                    print(f"⚠️ pactl failed, пробуем amixer...")
-                    self.set_volume_fallback(action)
+            # Подключаемся к звуковому серверу
+            with pulsectl.Pulse('golo-volume-control') as pulse:
+                # Получаем СПИСОК ВСЕХ устройств вывода
+                sinks = pulse.sink_list()
+                
+                if not sinks:
+                    print("⚠️ Аудио-устройства не найдены!")
+                    return
+
+                # Применяем команду КО ВСЕМ устройствам сразу
+                for sink in sinks:
+                    if action == 'up':
+                        pulse.volume_change_all_chans(sink, 0.1)
+                        print(f"🔊 {sink.description}: +10%")
+                    
+                    elif action == 'down':
+                        pulse.volume_change_all_chans(sink, -0.1)
+                        print(f"🔉 {sink.description}: -10%")
+                    
+                    elif action == 'max':
+                        pulse.volume_set_all_chans(sink, 1.0)
+                        pulse.mute(sink, False)
+                        print(f"📢 {sink.description}: MAX")
+                    
+                    elif action == 'mute':
+                        is_muted = sink.mute
+                        pulse.mute(sink, not is_muted)
+                        state = "Muted" if not is_muted else "Unmuted"
+                        print(f"🔇 {sink.description}: {state}")
 
         except Exception as e:
-            print(f"Ошибка звука: {e}")
+            print(f"CRITICAL AUDIO ERROR: {e}")
 
     def start_music(self, music_file=None):
         self.stop_music()
