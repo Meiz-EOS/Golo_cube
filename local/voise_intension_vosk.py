@@ -96,10 +96,6 @@ class InfoAssistant:
             'volume_mute': {
                 'func': lambda: self.cmd_volume("mute"),
                 'phrases': ['выключи звук', 'без звука', 'тишина']
-            },
-            'stop': {
-                'func': self.cmd_stop,
-                'phrases': ['стоп', 'отключись', 'выключись', 'выключить']
             }
         }
     

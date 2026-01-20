@@ -67,7 +67,7 @@ echo "🎤 Запуск голосового управления (Vosk Offline)
 if [ ! -d "model" ]; then
     echo "❌ ОШИБКА: Папка 'model' не найдена в $(pwd)!"
 else
-    nohup python3 voise_intension_vosk.py > /tmp/voice.log 2>&1 &
+    nohup python3 -u voise_intension_vosk.py > /tmp/voice.log 2>&1 &
 fi
 
 # 7. ЗАПУСК МЕДИА-ПЛЕЕРА (ГЛАВНЫЙ ПРОЦЕСС)
@@ -77,7 +77,7 @@ echo "🎬 Запуск медиа-плеера..."
 
 # Проверка на существование файла
 if [ -f "media_choose.py" ]; then
-    python3 media_choose.py
+    python3 -u media_choose.py
 else
     echo "❌ КРИТИЧЕСКАЯ ОШИБКА: Файл media_choose.py не найден!"
     exit 1
